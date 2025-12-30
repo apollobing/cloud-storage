@@ -1,0 +1,77 @@
+# Base configuration (serves as 'dev' profile by default)
+spring:
+  application:
+    name: cloud-storage
+
+  profiles:
+    active: ${SPRING_PROFILE:dev}  # Default to 'dev' if not specified
+
+  jpa:
+    show-sql: true
+
+  data:
+    redis:
+      host: localhost
+
+  config:
+    import: "optional:file:./.env.example[.properties]"
+
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:storage}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:password}
+
+  servlet:
+    multipart:
+      # Maximum file size (e.g., 50 megabytes). Should match Nginx configuration.
+      max-file-size: 50MB
+      # Maximum request size (important when uploading multiple files simultaneously).
+      max-request-size: 50MB
+
+  docker:
+    compose:
+      enabled: true
+      file: docker-compose.yml
+      lifecycle-management: start_only
+
+server:
+  port: 8080  # Explicit port configuration
+  servlet:
+    session:
+      timeout: 6000s  # Session timeout: 100 minutes (6000 seconds)
+      cookie:
+        same-site: lax
+        http-only: true
+        secure: false  # Set to true for production with HTTPS
+  tomcat:
+    max-part-count: 100
+
+logging:
+  level:
+    org.springframework.security: DEBUG  # Use WARN or INFO in production
+
+springdoc:
+  swagger-ui:
+    enabled: true  # Disable or secure in production
+
+minio:
+  url: ${MINIO_URL:http://localhost:9000}
+  bucketName: ${MINIO_BUCKET_NAME:user-files}
+  accessKey: ${MINIO_ACCESS_KEY:minioadmin}
+  secretKey: ${MINIO_SECRET_KEY:minioadmin}
+
+---
+# Production profile configuration
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  jpa:
+    show-sql: false  # Disable SQL logging in production
+
+logging:
+  level:
+    org.springframework.security: WARN  # Less verbose logging
+    org.hibernate: WARN
+    com.example.cloudstorage: INFO
