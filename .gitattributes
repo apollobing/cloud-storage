@@ -1,2 +1,5 @@
 /mvnw text eol=lf
 *.cmd text eol=crlf
+
+# Exclude bundled React build from language stats
+src/main/resources/static/assets/** linguist-vendored
