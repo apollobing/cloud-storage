@@ -13,7 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.stream.StreamSupport;
 
 /**
  * Service for searching user files.
@@ -33,14 +32,21 @@ public class SearchService {
     private static final int MAX_SEARCH_RESULTS = 100;
 
     /**
-     * Searches for files matching the query string in file names.
-     * Search is case-insensitive and recursive across all user files.
+     * Searches for files and folders matching the query string.
+     * Search is case-insensitive and recursive across all user resources.
+
+     * Implementation uses a hybrid approach:
+     * 1. Search files using recursive listing
+     * 2. Extract folder paths from file paths and filter by query
+     * 3. Search directory markers (objects ending with '/')
+     * 4. Combine and deduplicate results
+
      * Note: This operation has O(n) complexity where n is the total number of user files.
      * For users with many files, consider implementing indexed search (e.g., Elasticsearch).
      * Results are limited to {@value MAX_SEARCH_RESULTS} items.
      *
      * @param user User performing the search
-     * @param query Search query (matched against file names, case-insensitive)
+     * @param query Search query (matched against file and folder names, case-insensitive)
      * @return List of matching ResourceInfo objects (max {@value MAX_SEARCH_RESULTS} results)
      * @throws com.example.cloudstorage.exception.InvalidPathException if query contains invalid characters
      * @throws StorageException if MinIO operation fails
@@ -50,6 +56,7 @@ public class SearchService {
 
         try {
             String userPrefix = pathService.buildUserPath(user.getId(), "");
+            String lowerQuery = query.toLowerCase();
 
             Iterable<Result<Item>> results = minioClient.listObjects(
                     ListObjectsArgs.builder()
@@ -59,22 +66,74 @@ public class SearchService {
                             .build()
             );
 
-            String lowerQuery = query.toLowerCase();
-            
-            List<ResourceInfo> searchResults = StreamSupport.stream(results.spliterator(), false)
-                    .map(result -> extractItem(result, user.getId()))
-                    .filter(info -> info != null && 
-                            info.getName().toLowerCase().contains(lowerQuery))
-                    .limit(MAX_SEARCH_RESULTS)
-                    .toList();
+            List<ResourceInfo> searchResults = new java.util.ArrayList<>();
+            java.util.Set<String> foundPaths = new java.util.HashSet<>();
 
-            log.info("Search completed for user {}: query='{}', found {} results", 
-                    user.getId(), query, searchResults.size());
+            for (Result<Item> result : results) {
+                ResourceInfo info = extractItem(result, user.getId());
 
-            return searchResults;
+                if (info != null && info.getName().toLowerCase().contains(lowerQuery)) {
+                    String fullPath = info.getPath() + info.getName();
+                    if (!foundPaths.contains(fullPath)) {
+                        searchResults.add(info);
+                        foundPaths.add(fullPath);
+                    }
+                }
+
+                if (info != null && !info.getPath().isEmpty()) {
+                    extractMatchingFolders(info.getPath(), lowerQuery, foundPaths, searchResults);
+                }
+
+                if (searchResults.size() >= MAX_SEARCH_RESULTS) {
+                    break;
+                }
+            }
+
+            log.info("Search completed for user {}: query='{}', found {} results ({} files, {} folders)",
+                    user.getId(), query, searchResults.size(),
+                    searchResults.stream().filter(r -> r.getType().toString().equals("FILE")).count(),
+                    searchResults.stream().filter(r -> r.getType().toString().equals("DIRECTORY")).count());
+
+            return searchResults.stream().limit(MAX_SEARCH_RESULTS).toList();
         } catch (Exception e) {
             log.error("Failed to search files for user {}: query='{}'", user.getId(), query, e);
             throw new StorageException("Failed to search files: " + query, e);
+        }
+    }
+
+    /**
+     * Extracts matching folder names from a path and adds them to results.
+     * For example, path "Documents/Reports/" will check "Documents" and "Reports".
+     *
+     * @param path File or folder path
+     * @param lowerQuery Lowercase search query
+     * @param foundPaths Set of already found paths (for deduplication)
+     * @param searchResults List to add matching folders to
+     */
+    private void extractMatchingFolders(String path, String lowerQuery,
+                                        java.util.Set<String> foundPaths,
+                                        List<ResourceInfo> searchResults) {
+        String[] parts = path.split(SLASH);
+        StringBuilder currentPath = new StringBuilder();
+
+        for (String part : parts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+
+            if (part.toLowerCase().contains(lowerQuery)) {
+                String folderPath = currentPath.toString();
+                String fullPath = folderPath + part + SLASH;
+
+                if (!foundPaths.contains(fullPath)) {
+                    ResourceInfo folderInfo = resourceInfoBuilder.build(
+                            folderPath + part + SLASH, 0, true);
+                    searchResults.add(folderInfo);
+                    foundPaths.add(fullPath);
+                }
+            }
+
+            currentPath.append(part).append(SLASH);
         }
     }
 
@@ -90,7 +149,7 @@ public class SearchService {
         try {
             Item item = result.get();
             String relative = pathService.stripUserPath(item.objectName(), userId);
-            
+
             if (relative.isEmpty()) {
                 return null;
             }
