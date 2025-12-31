@@ -1,0 +1,54 @@
+services:
+  postgres:
+    container_name: postgres
+    image: postgres:17.5-alpine
+    env_file:
+      - .env.example  # Load variables from .env.example directly into container
+    ports:
+      - "5432:5432"
+    restart: always
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  redis:
+    container_name: redis
+    image: redis:8.4-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+
+  minio:
+    container_name: minio
+    image: minio/minio:RELEASE.2025-07-18T21-56-31Z-cpuv1
+    env_file:
+      - .env.example  # Load variables from .env.example directly into container
+    ports:
+      - "9000:9000" # Minio API
+      - "9001:9001" # Minio Console
+    restart: always
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    container_name: frontend-react
+    ports:
+      - "80:80"
+    volumes:
+      - ./src/main/resources/static:/usr/share/nginx/html:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - postgres
+      - redis
+      - minio
+    restart: always
+
+volumes:
+  postgres_data:
+  minio_data:
+  redis_data:
